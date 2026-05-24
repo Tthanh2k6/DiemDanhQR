@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+  <title>QR Attendance Pro - Điểm Danh Thông Minh</title>
+  
+  <!-- SEO & PWA Meta Tags -->
+  <meta name="description" content="Ứng dụng quét mã QR điểm danh trực tiếp liên kết Google Sheets. Chạy nhanh, bảo mật, hỗ trợ giọng nói tiếng Việt và cài đặt như App PWA.">
+  <meta name="theme-color" content="#4361ee">
+  <link rel="manifest" href="manifest.json">
+  <link rel="shortcut icon" href="https://cdn-icons-png.flaticon.com/512/3022/3022250.png" type="image/x-icon">
+  
+  <!-- FontAwesome & Libraries -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div class="app-wrapper">
+    <!-- Header -->
+    <header>
+      <div class="logo-section">
+        <div class="logo-icon">
+          <i class="fa-solid fa-qrcode"></i>
+        </div>
+        <div>
+          <h1>QR Attendance</h1>
+          <span>Bản kết nối Google Sheets trực tiếp</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button id="btnThemeToggle" class="btn-circle" title="Chuyển chế độ Sáng/Tối">
+          <i class="fa-solid fa-sun"></i>
+        </button>
+        <button id="btnSettings" class="btn-circle" title="Cấu hình Google Sheets">
+          <i class="fa-solid fa-gear"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Control Panel -->
+    <main class="glass-card" id="controlPanel">
+      <div class="config-summary">
+        <div>
+          <span id="connStatusDot" class="status-dot"></span>
+          <span id="connStatusText">Chưa cấu hình Google Sheet</span>
+        </div>
+        <div style="font-weight: 600;" id="dateIndicator">...</div>
+      </div>
+    </main>
+
+    <!-- Scanner Camera Card -->
+    <div class="glass-card" style="padding: 14px; display: flex; flex-direction: column; gap: 14px;">
+      <!-- Real-time Scanner Box -->
+      <div class="scanner-container">
+        <!-- Live Video feed -->
+        <div id="reader"></div>
+        
+        <!-- Target Laser Frame -->
+        <div class="scanner-overlay" id="scannerOverlay">
+          <div class="scanner-box">
+            <div class="scanner-corner corner-tl"></div>
+            <div class="scanner-corner corner-tr"></div>
+            <div class="scanner-corner corner-bl"></div>
+            <div class="scanner-corner corner-br"></div>
+            <div class="laser-line" id="laserLine"></div>
+          </div>
+        </div>
+
+        <!-- Camera Off / Ready Placeholder -->
+        <div class="camera-placeholder" id="cameraPlaceholder">
+          <i class="fa-solid fa-video-slash"></i>
+          <p>Camera đang tắt</p>
+        </div>
+
+        <!-- Dynamic Success/Error Result Screen inside Scanner Box -->
+        <div class="result-popup" id="resultPopup">
+          <div class="result-icon" id="resultIcon">
+            <i class="fa-solid fa-check"></i>
+          </div>
+          <div class="result-title" id="resultTitle">Thành công</div>
+          <div class="result-name" id="resultName">Nguyễn Văn A</div>
+          <div class="result-id" id="resultId">GT01</div>
+          <button class="btn-confirm" id="btnConfirmResult">Xác nhận & tiếp tục</button>
+        </div>
+      </div>
+
+      <!-- Date Selection and Controls -->
+      <div class="form-group" style="margin-bottom: 0;">
+        <label class="form-label" for="attendanceDate"><i class="fa-regular fa-calendar-check" style="margin-right: 4px;"></i> Ngày điểm danh</label>
+        <div class="input-container">
+          <i class="fa-solid fa-calendar-day input-icon"></i>
+          <input type="date" id="attendanceDate" class="styled-input">
+        </div>
+      </div>
+
+      <!-- Action Button -->
+      <button class="btn-main" id="btnStartCamera">
+        <i class="fa-solid fa-camera"></i> Bật Camera Điểm Danh
+      </button>
+    </div>
+
+    <!-- Scanning Mode Options -->
+    <div class="glass-card" style="padding: 16px;">
+      <!-- Continuous Scan Toggle -->
+      <div class="switch-container">
+        <div class="switch-label-group">
+          <span class="switch-title">Quét liên tục (Auto Scan)</span>
+          <span class="switch-desc">Tự động quét tiếp sau 2.5s không cần bấm nút</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="chkContinuous" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Voice Output Toggle -->
+      <div class="switch-container" style="margin-bottom: 0;">
+        <div class="switch-label-group">
+          <span class="switch-title">Phát âm đọc tên (Text-to-Speech)</span>
+          <span class="switch-desc">Đọc tên bằng tiếng Việt khi điểm danh thành công</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="chkVoice" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- History Logs -->
+    <div class="glass-card">
+      <div class="log-header">
+        <h3 style="font-size: 16px; font-weight: 700;"><i class="fa-solid fa-history" style="margin-right: 6px; color: var(--primary)"></i> Lịch sử vừa quét</h3>
+        <span class="log-count" id="logCount">Đã quét: 0</span>
+      </div>
+      <div class="log-list" id="logList">
+        <div class="log-empty">Chưa có ai điểm danh trong phiên này</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Configuration Modal -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal-content">
+      <h2 class="modal-title"><i class="fa-solid fa-gears" style="color: var(--primary); margin-right: 8px;"></i> Cấu hình Google Sheet</h2>
+      
+      <div class="form-group">
+        <label class="form-label" for="gasUrl">Google Apps Script URL Web App</label>
+        <div class="input-container">
+          <i class="fa-solid fa-link input-icon"></i>
+          <input type="url" id="gasUrl" class="styled-input" placeholder="https://script.google.com/macros/s/.../exec">
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btnCancelSettings">Hủy</button>
+        <button class="btn-primary" id="btnSaveSettings">Lưu cài đặt</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="app.js"></script>
+</body>
+</html>
