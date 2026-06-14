@@ -395,9 +395,6 @@ async function startScanning() {
         }
       }
 
-      if (cameras.length > 1) {
-        DOM.btnSwitchCamera.style.display = 'flex';
-      }
     }
   } catch (e) {
     console.warn('Không thể liệt kê camera, dùng mặc định:', e);
@@ -412,6 +409,7 @@ async function startScanning() {
     DOM.cameraPlaceholder.style.display = 'none';
     DOM.scannerOverlay.style.display = 'block';
     DOM.laserLine.style.display = 'block';
+    DOM.btnSwitchCamera.style.display = 'flex';
   };
 
   const onFailed = (err, retried) => {
@@ -466,15 +464,27 @@ function stopScanning() {
 }
 
 async function switchCamera() {
-  if (!state.isCameraActive || state.cameras.length < 2) return;
-
-  const currentIdx = state.cameras.findIndex(c => c.id === state.activeCameraId);
-  const nextIdx = (currentIdx + 1) % state.cameras.length;
-  const next = state.cameras[nextIdx];
+  if (!state.isCameraActive) return;
 
   DOM.btnSwitchCamera.innerHTML = '<i class="fa-solid fa-camera-rotate fa-spin"></i>';
 
   try {
+    // Lấy lại danh sách camera mới nhất từ trình duyệt
+    let cameras = state.cameras;
+    if (!cameras || cameras.length === 0) {
+      cameras = await Html5Qrcode.getCameras();
+      state.cameras = cameras;
+    }
+
+    if (!cameras || cameras.length < 2) {
+      DOM.btnSwitchCamera.innerHTML = '<i class="fa-solid fa-camera-rotate"></i>';
+      return;
+    }
+
+    const currentIdx = cameras.findIndex(c => c.id === state.activeCameraId);
+    const nextIdx = (currentIdx + 1) % cameras.length;
+    const next = cameras[nextIdx];
+
     await state.html5QrCode.stop();
     state.activeCameraId = next.id;
 
