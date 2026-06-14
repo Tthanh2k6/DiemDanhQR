@@ -853,6 +853,30 @@ input:checked + .slider:before {
   border: 1px solid var(--primary-glow);
 }
 
+/* Select camera trong settings */
+.styled-select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236c7a9c' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C%2Fsvg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+
+.styled-select option {
+  background: #1a1f35;
+  color: #e0e4f0;
+  padding: 8px;
+}
+
+.cam-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 7px;
+  line-height: 1.4;
+}
+
 /* Hàng nút bật camera + đổi camera */
 .camera-btn-row {
   display: flex;
