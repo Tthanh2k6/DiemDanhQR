@@ -853,17 +853,20 @@ input:checked + .slider:before {
   border: 1px solid var(--primary-glow);
 }
 
-/* Nút đổi camera (switch camera) */
+/* Hàng nút bật camera + đổi camera */
+.camera-btn-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+/* Nút đổi camera */
 .btn-switch-cam {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
-  z-index: 4;
-  height: 38px;
-  padding: 0 14px;
-  border-radius: 20px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #fff;
+  height: auto;
+  padding: 0 16px;
+  border-radius: 16px;
+  background: var(--glass-bg);
+  color: var(--primary);
   border: 1.5px solid var(--primary);
   display: none;
   align-items: center;
@@ -872,20 +875,19 @@ input:checked + .slider:before {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  white-space: nowrap;
   transition: var(--transition);
-  letter-spacing: 0.3px;
+  font-family: inherit;
+  flex-shrink: 0;
 }
 
 .btn-switch-cam:hover {
   background: var(--primary);
   color: white;
-  transform: scale(1.05);
 }
 
 .btn-switch-cam:active {
-  transform: scale(0.96);
+  transform: scale(0.95);
 }
 
 /* CSS Keyframe Animations */
