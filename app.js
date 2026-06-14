@@ -14,6 +14,7 @@ const state = {
   html5QrCode: null,
   cameras: [],                // Danh sách camera khả dụng
   activeCameraId: null,       // ID camera đang dùng
+  selectedCameraId: localStorage.getItem('qr_attendance_camera_id') || '', // Camera người dùng chọn
   scanHistory: (() => { try { return JSON.parse(localStorage.getItem('qr_attendance_history')) || []; } catch(e) { return []; } })(),
   theme: localStorage.getItem('qr_attendance_theme') || 'dark',
   continuousScan: localStorage.getItem('qr_attendance_continuous') !== 'false', // Default true
@@ -58,6 +59,8 @@ const DOM = {
   pendingIndicator: document.getElementById('pendingIndicator'),
   pendingText: document.getElementById('pendingText'),
   btnSwitchCamera: document.getElementById('btnSwitchCamera'),
+  cameraSelect: document.getElementById('cameraSelect'),
+  camHint: document.getElementById('camHint'),
 
   // Bảng Lịch sử (Logs)
   logList: document.getElementById('logList'),
@@ -211,6 +214,7 @@ function registerEvents() {
   DOM.btnSettings.addEventListener('click', () => {
     DOM.gasUrlInput.value = state.gasUrl;
     DOM.settingsModal.classList.add('active');
+    loadCameraOptions();
   });
   
   DOM.btnCancelSettings.addEventListener('click', () => {
@@ -228,6 +232,16 @@ function registerEvents() {
       localStorage.removeItem('qr_attendance_gas_url');
       updateConnectionStatus(false, "Chưa cấu hình Google Sheet");
     }
+
+    // Lưu camera đã chọn
+    const camId = DOM.cameraSelect.value;
+    state.selectedCameraId = camId;
+    if (camId) {
+      localStorage.setItem('qr_attendance_camera_id', camId);
+    } else {
+      localStorage.removeItem('qr_attendance_camera_id');
+    }
+
     DOM.settingsModal.classList.remove('active');
   });
   
@@ -303,6 +317,58 @@ function updateConnectionStatus(success, message) {
   }
 }
 
+// Liệt kê và hiển thị danh sách camera trong settings
+async function loadCameraOptions() {
+  DOM.cameraSelect.innerHTML = '<option value="">⏳ Đang tải danh sách camera...</option>';
+  DOM.camHint.textContent = '';
+
+  try {
+    const cameras = await Html5Qrcode.getCameras();
+    state.cameras = cameras;
+
+    if (!cameras || cameras.length === 0) {
+      DOM.cameraSelect.innerHTML = '<option value="">Không tìm thấy camera nào</option>';
+      DOM.camHint.textContent = 'Hãy cấp quyền camera cho trình duyệt rồi thử lại.';
+      return;
+    }
+
+    let options = '<option value="">🔄 Tự động (ưu tiên góc rộng)</option>';
+    cameras.forEach((cam, i) => {
+      const rawLabel = cam.label || '';
+      const label = formatCameraLabel(rawLabel, i, cameras.length);
+      const selected = cam.id === state.selectedCameraId ? ' selected' : '';
+      options += `<option value="${cam.id}"${selected}>${label}</option>`;
+    });
+
+    DOM.cameraSelect.innerHTML = options;
+
+    // Nếu chưa chọn, thử pre-select camera góc rộng
+    if (!state.selectedCameraId) {
+      const wide = cameras.find(c => /wide|ultra|0\.6/i.test(c.label || ''));
+      if (wide) DOM.cameraSelect.value = wide.id;
+    }
+
+    DOM.camHint.textContent = `Tìm thấy ${cameras.length} camera. Chọn xong nhấn "Lưu cài đặt".`;
+  } catch (e) {
+    DOM.cameraSelect.innerHTML = '<option value="">⚠️ Cần cấp quyền camera trước</option>';
+    DOM.camHint.textContent = 'Bật camera một lần rồi vào lại đây để tải danh sách.';
+  }
+}
+
+function formatCameraLabel(rawLabel, index, total) {
+  const l = rawLabel.toLowerCase();
+  const isWide = /wide|ultra|0\.6/i.test(rawLabel);
+  const isFront = /front|user|facing front/i.test(rawLabel);
+  const isBack = /back|rear|environment|facing back/i.test(rawLabel);
+
+  // Đếm số camera cùng loại để đánh số
+  if (isWide) return `📷 Camera Góc Rộng (0.6×)`;
+  if (isFront) return `🤳 Camera Trước`;
+  if (isBack) return `📷 Camera Sau`;
+  if (!rawLabel) return `📷 Camera ${index + 1}`;
+  return `📷 ${rawLabel}`;
+}
+
 // Kiểm tra kết nối đến Google Sheets
 async function testSheetConnection(url) {
   updateConnectionStatus(false, "Đang kiểm tra kết nối...");
@@ -370,34 +436,28 @@ async function startScanning() {
     aspectRatio: 1.0
   };
 
-  // Tự động chọn camera góc rộng (0.6x) nếu có
+  // Dùng camera đã chọn trong cài đặt; nếu chưa chọn thì tự chọn góc rộng
   let primaryCam = { facingMode: "environment" };
-  try {
-    const cameras = await Html5Qrcode.getCameras();
-    if (cameras && cameras.length > 0) {
-      state.cameras = cameras;
-
-      // Tìm camera góc rộng qua nhãn
-      const wide = cameras.find(c => /wide|ultra|0\.6|góc.rộng/i.test(c.label || ''));
-      if (wide) {
-        primaryCam = wide.id;
-        state.activeCameraId = wide.id;
-      } else {
-        // Lọc camera sau (loại bỏ camera trước)
-        const rear = cameras.filter(c => !/front|user|facing front|trước/i.test(c.label || ''));
-        if (rear.length >= 2) {
-          // Camera sau thứ 2 thường là góc rộng trên điện thoại 3-camera
-          primaryCam = rear[1].id;
-          state.activeCameraId = rear[1].id;
-        } else if (rear.length === 1) {
-          primaryCam = rear[0].id;
-          state.activeCameraId = rear[0].id;
+  if (state.selectedCameraId) {
+    primaryCam = state.selectedCameraId;
+    state.activeCameraId = state.selectedCameraId;
+  } else {
+    try {
+      const cameras = await Html5Qrcode.getCameras();
+      if (cameras && cameras.length > 0) {
+        state.cameras = cameras;
+        const wide = cameras.find(c => /wide|ultra|0\.6/i.test(c.label || ''));
+        if (wide) {
+          primaryCam = wide.id; state.activeCameraId = wide.id;
+        } else {
+          const rear = cameras.filter(c => !/front|user|facing front/i.test(c.label || ''));
+          if (rear.length >= 2) { primaryCam = rear[1].id; state.activeCameraId = rear[1].id; }
+          else if (rear.length === 1) { primaryCam = rear[0].id; state.activeCameraId = rear[0].id; }
         }
       }
-
+    } catch (e) {
+      console.warn('Không thể liệt kê camera, dùng mặc định:', e);
     }
-  } catch (e) {
-    console.warn('Không thể liệt kê camera, dùng mặc định:', e);
   }
 
   const onStarted = () => {
