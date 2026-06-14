@@ -853,6 +853,34 @@ input:checked + .slider:before {
   border: 1px solid var(--primary-glow);
 }
 
+/* Nút đổi camera (switch camera) */
+.btn-switch-cam {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  z-index: 4;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: var(--primary);
+  border: 1px solid var(--primary-glow);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: var(--transition);
+}
+
+.btn-switch-cam:hover {
+  background: var(--primary);
+  color: white;
+  transform: scale(1.1);
+}
+
 /* CSS Keyframe Animations */
 @keyframes shine {
   0% { left: -50%; }

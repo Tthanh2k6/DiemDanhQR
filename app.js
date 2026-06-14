@@ -12,7 +12,9 @@ const state = {
   pendingCount: 0,            // Số API call đang chờ phản hồi
   isCameraActive: false,
   html5QrCode: null,
-  scanHistory: JSON.parse(localStorage.getItem('qr_attendance_history')) || [],
+  cameras: [],                // Danh sách camera khả dụng
+  activeCameraId: null,       // ID camera đang dùng
+  scanHistory: (() => { try { return JSON.parse(localStorage.getItem('qr_attendance_history')) || []; } catch(e) { return []; } })(),
   theme: localStorage.getItem('qr_attendance_theme') || 'dark',
   continuousScan: localStorage.getItem('qr_attendance_continuous') !== 'false', // Default true
   voiceOutput: localStorage.getItem('qr_attendance_voice') !== 'false', // Default true
@@ -55,6 +57,7 @@ const DOM = {
   scanToastId: document.getElementById('scanToastId'),
   pendingIndicator: document.getElementById('pendingIndicator'),
   pendingText: document.getElementById('pendingText'),
+  btnSwitchCamera: document.getElementById('btnSwitchCamera'),
 
   // Bảng Lịch sử (Logs)
   logList: document.getElementById('logList'),
@@ -246,6 +249,9 @@ function registerEvents() {
   
   // Start/Stop Camera
   DOM.btnStartCamera.addEventListener('click', toggleCamera);
+
+  // Switch Camera
+  DOM.btnSwitchCamera.addEventListener('click', switchCamera);
   
   // Result Confirmation Close
   DOM.btnConfirmResult.addEventListener('click', () => {
@@ -335,14 +341,13 @@ function toggleCamera() {
   }
 }
 
-function startScanning() {
+async function startScanning() {
   if (!state.gasUrl) {
     alert("Vui lòng click vào biểu tượng Răng cưa cài đặt ở góc trên bên phải để cấu hình URL Google Sheet trước!");
     DOM.btnSettings.click();
     return;
   }
 
-  // Khởi tạo Audio Context tránh bị chặn phát âm thanh sau này
   if (!audioCtx) {
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -352,7 +357,6 @@ function startScanning() {
   DOM.btnStartCamera.disabled = true;
   DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Đang khởi động camera...';
 
-  // Khởi tạo thư viện
   if (!state.html5QrCode) {
     state.html5QrCode = new Html5Qrcode("reader");
   }
@@ -360,36 +364,74 @@ function startScanning() {
   const config = {
     fps: 10,
     qrbox: function(width, height) {
-      // Thiết kế khung quét vuông cân đối trên màn hình
       const size = Math.min(width, height) * 0.65;
       return { width: size, height: size };
     },
     aspectRatio: 1.0
   };
 
-  // Ưu tiên camera sau (facingMode: environment)
-  state.html5QrCode.start(
-    { facingMode: "environment" },
-    config,
-    onQrCodeSuccess,
-    onQrCodeError
-  ).then(() => {
+  // Tự động chọn camera góc rộng (0.6x) nếu có
+  let primaryCam = { facingMode: "environment" };
+  try {
+    const cameras = await Html5Qrcode.getCameras();
+    if (cameras && cameras.length > 0) {
+      state.cameras = cameras;
+
+      // Tìm camera góc rộng qua nhãn
+      const wide = cameras.find(c => /wide|ultra|0\.6|góc.rộng/i.test(c.label || ''));
+      if (wide) {
+        primaryCam = wide.id;
+        state.activeCameraId = wide.id;
+      } else {
+        // Lọc camera sau (loại bỏ camera trước)
+        const rear = cameras.filter(c => !/front|user|facing front|trước/i.test(c.label || ''));
+        if (rear.length >= 2) {
+          // Camera sau thứ 2 thường là góc rộng trên điện thoại 3-camera
+          primaryCam = rear[1].id;
+          state.activeCameraId = rear[1].id;
+        } else if (rear.length === 1) {
+          primaryCam = rear[0].id;
+          state.activeCameraId = rear[0].id;
+        }
+      }
+
+      if (cameras.length > 1) {
+        DOM.btnSwitchCamera.style.display = 'flex';
+      }
+    }
+  } catch (e) {
+    console.warn('Không thể liệt kê camera, dùng mặc định:', e);
+  }
+
+  const onStarted = () => {
     state.isCameraActive = true;
     DOM.btnStartCamera.disabled = false;
     DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-power-off"></i> Tắt Camera Điểm Danh';
     DOM.btnStartCamera.style.background = 'linear-gradient(135deg, var(--error), #d90429)';
     DOM.btnStartCamera.style.boxShadow = '0 10px 25px var(--error-glow)';
-    
-    // Hiển thị khung quét laser
     DOM.cameraPlaceholder.style.display = 'none';
     DOM.scannerOverlay.style.display = 'block';
     DOM.laserLine.style.display = 'block';
-  }).catch(err => {
-    console.error("Không mở được camera:", err);
-    alert("Không thể truy cập camera của bạn! Vui lòng cấp quyền camera cho trang web trong phần cài đặt trình duyệt.");
-    DOM.btnStartCamera.disabled = false;
-    DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-camera"></i> Bật Camera Điểm Danh';
-  });
+  };
+
+  const onFailed = (err, retried) => {
+    if (!retried && state.activeCameraId) {
+      // Thử lại bằng camera mặc định nếu chọn theo ID thất bại
+      state.activeCameraId = null;
+      state.html5QrCode.start({ facingMode: "environment" }, config, onQrCodeSuccess, onQrCodeError)
+        .then(onStarted)
+        .catch(e => onFailed(e, true));
+    } else {
+      console.error("Không mở được camera:", err);
+      alert("Không thể truy cập camera của bạn! Vui lòng cấp quyền camera cho trang web trong phần cài đặt trình duyệt.");
+      DOM.btnStartCamera.disabled = false;
+      DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-camera"></i> Bật Camera Điểm Danh';
+    }
+  };
+
+  state.html5QrCode.start(primaryCam, config, onQrCodeSuccess, onQrCodeError)
+    .then(onStarted)
+    .catch(err => onFailed(err, false));
 }
 
 function stopScanning() {
@@ -410,7 +452,9 @@ function stopScanning() {
       DOM.laserLine.style.display = 'none';
       DOM.scanToast.classList.remove('show');
       DOM.pendingIndicator.style.display = 'none';
+      DOM.btnSwitchCamera.style.display = 'none';
       state.pendingCount = 0;
+      state.activeCameraId = null;
       state.recentScans.clear();
       closeResultPopup();
     }).catch(err => {
@@ -418,6 +462,36 @@ function stopScanning() {
       state.isCameraActive = false;
       DOM.btnStartCamera.disabled = false;
     });
+  }
+}
+
+async function switchCamera() {
+  if (!state.isCameraActive || state.cameras.length < 2) return;
+
+  const currentIdx = state.cameras.findIndex(c => c.id === state.activeCameraId);
+  const nextIdx = (currentIdx + 1) % state.cameras.length;
+  const next = state.cameras[nextIdx];
+
+  DOM.btnSwitchCamera.innerHTML = '<i class="fa-solid fa-camera-rotate fa-spin"></i>';
+
+  try {
+    await state.html5QrCode.stop();
+    state.activeCameraId = next.id;
+
+    const config = {
+      fps: 10,
+      qrbox: function(width, height) {
+        const size = Math.min(width, height) * 0.65;
+        return { width: size, height: size };
+      },
+      aspectRatio: 1.0
+    };
+
+    await state.html5QrCode.start(next.id, config, onQrCodeSuccess, onQrCodeError);
+  } catch (err) {
+    console.error("Lỗi đổi camera:", err);
+  } finally {
+    DOM.btnSwitchCamera.innerHTML = '<i class="fa-solid fa-camera-rotate"></i>';
   }
 }
 
@@ -562,11 +636,11 @@ function handleScanError(id, errorMessage) {
   DOM.resultName.innerText = errorMessage;
   DOM.resultId.innerText = `Mã quét: ${id}`;
   
-  // Nút xác nhận lỗi luôn hiển thị để người dùng biết đã xảy ra lỗi
   DOM.btnConfirmResult.style.display = 'block';
   DOM.btnConfirmResult.innerText = "Thử lại";
-  
-  // Tự động xóa timeout tự đóng nếu có
+
+  addHistoryItem(id, errorMessage, false, "Thất bại");
+
   clearTimeout(state.autoCloseTimeout);
 }
 
@@ -632,10 +706,12 @@ function updatePendingBadge() {
 function addHistoryItem(id, name, success, note) {
   const now = new Date();
   const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-  
+  const dateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}`;
+
   const newItem = {
     id: id,
     name: name,
+    date: dateStr,
     time: timeStr,
     success: success,
     note: note
@@ -678,7 +754,7 @@ function renderHistory() {
           <span class="log-details">${item.id} • ${item.note}</span>
         </div>
         <div style="display: flex; align-items: center; gap: 10px;">
-          <span class="log-time">${item.time}</span>
+          <span class="log-time">${item.date ? item.date + ' ' : ''}${item.time}</span>
           ${successIcon}
         </div>
       </div>
