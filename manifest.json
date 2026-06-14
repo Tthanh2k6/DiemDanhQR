@@ -2,7 +2,7 @@
   "name": "QR Attendance Pro - Điểm Danh Thông Minh",
   "short_name": "QR Điểm Danh",
   "description": "Ứng dụng quét mã QR để điểm danh nhanh chóng và lưu trực tiếp về Google Sheets của bạn mà không cần server trung gian.",
-  "start_url": "index.html",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#0b0d19",
   "theme_color": "#4361ee",

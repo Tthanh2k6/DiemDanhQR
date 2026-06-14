@@ -87,6 +87,21 @@
           <div class="result-id" id="resultId">GT01</div>
           <button class="btn-confirm" id="btnConfirmResult">Xác nhận & tiếp tục</button>
         </div>
+
+        <!-- Toast kết quả nhanh (chế độ quét liên tục) -->
+        <div class="scan-toast" id="scanToast">
+          <div class="toast-icon" id="scanToastIcon"></div>
+          <div class="toast-body">
+            <div class="toast-name" id="scanToastName"></div>
+            <div class="toast-scan-id" id="scanToastId"></div>
+          </div>
+        </div>
+
+        <!-- Badge số lượng yêu cầu đang xử lý -->
+        <div class="pending-indicator" id="pendingIndicator">
+          <i class="fa-solid fa-spinner fa-spin"></i>
+          <span id="pendingText">0</span>
+        </div>
       </div>
 
       <!-- Date Selection and Controls -->
@@ -109,8 +124,8 @@
       <!-- Continuous Scan Toggle -->
       <div class="switch-container">
         <div class="switch-label-group">
-          <span class="switch-title">Quét liên tục (Auto Scan)</span>
-          <span class="switch-desc">Tự động quét tiếp sau 2.5s không cần bấm nút</span>
+          <span class="switch-title">Quét liên tục (Queue Mode)</span>
+          <span class="switch-desc">Quét ngay mã tiếp theo, không cần chờ kết quả</span>
         </div>
         <label class="switch">
           <input type="checkbox" id="chkContinuous" checked>

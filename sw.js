@@ -2,6 +2,7 @@ const CACHE_NAME = 'qr-attendance-cache-v1';
 
 // Các tài nguyên cần tải trước và lưu trữ tạm thời
 const ASSETS_TO_CACHE = [
+  './',
   'index.html',
   'style.css',
   'app.js',

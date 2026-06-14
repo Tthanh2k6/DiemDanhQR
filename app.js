@@ -6,14 +6,18 @@
 // 1. Khai báo Trạng thái Ứng dụng (App State)
 const state = {
   gasUrl: localStorage.getItem('qr_attendance_gas_url') || '',
-  isProcessing: false,
+  isProcessing: false,        // Chỉ dùng ở chế độ single scan
+  recentScans: new Map(),     // Debounce: QR code → timestamp quét gần nhất
+  SCAN_DEBOUNCE_MS: 3000,     // Không quét lại cùng mã trong 3 giây
+  pendingCount: 0,            // Số API call đang chờ phản hồi
   isCameraActive: false,
   html5QrCode: null,
   scanHistory: JSON.parse(localStorage.getItem('qr_attendance_history')) || [],
   theme: localStorage.getItem('qr_attendance_theme') || 'dark',
   continuousScan: localStorage.getItem('qr_attendance_continuous') !== 'false', // Default true
   voiceOutput: localStorage.getItem('qr_attendance_voice') !== 'false', // Default true
-  autoCloseTimeout: null
+  autoCloseTimeout: null,
+  toastTimeout: null
 };
 
 // 2. Định nghĩa các phần tử DOM (DOM Elements)
@@ -36,14 +40,22 @@ const DOM = {
   chkContinuous: document.getElementById('chkContinuous'),
   chkVoice: document.getElementById('chkVoice'),
   
-  // Hộp thoại Kết quả (Result Popup)
+  // Hộp thoại Kết quả (Result Popup - single scan mode)
   resultPopup: document.getElementById('resultPopup'),
   resultIcon: document.getElementById('resultIcon'),
   resultTitle: document.getElementById('resultTitle'),
   resultName: document.getElementById('resultName'),
   resultId: document.getElementById('resultId'),
   btnConfirmResult: document.getElementById('btnConfirmResult'),
-  
+
+  // Toast nhanh (continuous mode)
+  scanToast: document.getElementById('scanToast'),
+  scanToastIcon: document.getElementById('scanToastIcon'),
+  scanToastName: document.getElementById('scanToastName'),
+  scanToastId: document.getElementById('scanToastId'),
+  pendingIndicator: document.getElementById('pendingIndicator'),
+  pendingText: document.getElementById('pendingText'),
+
   // Bảng Lịch sử (Logs)
   logList: document.getElementById('logList'),
   logCount: document.getElementById('logCount')
@@ -299,11 +311,11 @@ async function testSheetConnection(url) {
     
     if (response.ok) {
       const data = await response.json();
-      // Nhận được phản hồi là chạy thành công (dù ID không tồn tại nhưng API hoạt động)
-      if (data && data.result) {
+      if (data && data.result && data.result.includes('CONNECTION_OK')) {
         updateConnectionStatus(true, "Bảng tính: Sẵn sàng");
       } else {
-        updateConnectionStatus(false, "Định dạng API Google không đúng");
+        // GAS cũ chưa có check TEST_CONN → sẽ tạo cột 24/5. Cần redeploy GAS mới!
+        updateConnectionStatus(false, "⚠️ GAS cũ - Hãy cập nhật & Redeploy Google Apps Script!");
       }
     } else {
       updateConnectionStatus(false, "Lỗi kết nối Web App (HTTP " + response.status + ")");
@@ -392,10 +404,14 @@ function stopScanning() {
       DOM.btnStartCamera.style.background = '';
       DOM.btnStartCamera.style.boxShadow = '';
       
-      // Ẩn khung quét laser
+      // Ẩn khung quét laser + reset toast/pending
       DOM.cameraPlaceholder.style.display = 'flex';
       DOM.scannerOverlay.style.display = 'none';
       DOM.laserLine.style.display = 'none';
+      DOM.scanToast.classList.remove('show');
+      DOM.pendingIndicator.style.display = 'none';
+      state.pendingCount = 0;
+      state.recentScans.clear();
       closeResultPopup();
     }).catch(err => {
       console.error("Lỗi khi tắt camera:", err);
@@ -405,15 +421,28 @@ function stopScanning() {
   }
 }
 
-function onQrCodeSuccess(decodedText, decodedResult) {
-  // Bỏ qua nếu đang xử lý lượt quét cũ
-  if (state.isProcessing) return;
-  
-  // Tạm khóa nhận diện
-  state.isProcessing = true;
-  
-  // Điểm danh
-  performAttendance(decodedText);
+function onQrCodeSuccess(decodedText) {
+  if (state.continuousScan) {
+    // QUEUE MODE: mỗi mã có debounce riêng, không khoá camera toàn cục
+    const now = Date.now();
+    const lastScan = state.recentScans.get(decodedText);
+    if (lastScan && (now - lastScan) < state.SCAN_DEBOUNCE_MS) return;
+
+    state.recentScans.set(decodedText, now);
+
+    // Dọn dẹp các entry đã hết hạn debounce
+    for (const [code, ts] of state.recentScans) {
+      if (now - ts > state.SCAN_DEBOUNCE_MS) state.recentScans.delete(code);
+    }
+
+    // Fire-and-forget: camera tiếp tục quét ngay lập tức
+    performAttendance(decodedText);
+  } else {
+    // SINGLE MODE: khoá toàn cục cho đến khi người dùng xác nhận
+    if (state.isProcessing) return;
+    state.isProcessing = true;
+    performAttendance(decodedText);
+  }
 }
 
 function onQrCodeError(errorMessage) {
@@ -425,73 +454,97 @@ async function performAttendance(qrId) {
   const selectedDate = DOM.attendanceDateInput.value;
   if (!selectedDate) {
     alert("Vui lòng chọn ngày điểm danh trước!");
-    state.isProcessing = false;
+    if (!state.continuousScan) state.isProcessing = false;
     return;
   }
 
-  // Tạm ngắt dòng laser quét để báo hiệu đang tải
-  DOM.laserLine.style.display = 'none';
-  
-  // Bật màn hình kết quả chế độ LOADING
-  showResultLoading(qrId);
+  if (state.continuousScan) {
+    // ── QUEUE MODE: chạy nền, camera không bị block ──
+    state.pendingCount++;
+    updatePendingBadge();
 
-  try {
-    const url = `${state.gasUrl}?scannedId=${encodeURIComponent(qrId)}&selectedDate=${encodeURIComponent(selectedDate)}`;
-    const response = await fetch(url, { method: 'GET' });
-    
-    if (response.ok) {
-      const data = await response.json();
-      const resultMessage = data.result || '';
-      
-      if (resultMessage.startsWith("SUCCESS:")) {
-        // THÀNH CÔNG
-        const fullName = resultMessage.replace("SUCCESS:", "").trim();
-        handleScanSuccess(qrId, fullName);
+    try {
+      const url = `${state.gasUrl}?scannedId=${encodeURIComponent(qrId)}&selectedDate=${encodeURIComponent(selectedDate)}`;
+      const response = await fetch(url, { method: 'GET' });
+
+      if (response.ok) {
+        const data = await response.json();
+        const resultMessage = data.result || '';
+
+        if (resultMessage.startsWith("SUCCESS:")) {
+          const fullName = resultMessage.replace("SUCCESS:", "").trim();
+          playAudioAlert(true);
+          speakVietnamese("Xin chào " + fullName);
+          addHistoryItem(qrId, fullName, true, "Thành công");
+          showScanToast(fullName, qrId, true);
+        } else {
+          const errorDetail = resultMessage.replace("ERROR:", "").trim();
+          playAudioAlert(false);
+          speakVietnamese("Lỗi điểm danh");
+          addHistoryItem(qrId, errorDetail, false, "Thất bại");
+          showScanToast(errorDetail, qrId, false);
+        }
       } else {
-        // THẤT BẠI (Mã không tồn tại hoặc lỗi trong Sheet)
-        const errorDetail = resultMessage.replace("ERROR:", "").trim();
-        handleScanError(qrId, errorDetail);
+        const errMsg = `Lỗi máy chủ HTTP ${response.status}`;
+        playAudioAlert(false);
+        addHistoryItem(qrId, errMsg, false, "Lỗi");
+        showScanToast(errMsg, qrId, false);
       }
-    } else {
-      handleScanError(qrId, `Lỗi máy chủ Google (HTTP ${response.status})`);
+    } catch (err) {
+      console.error("Lỗi thực hiện điểm danh:", err);
+      playAudioAlert(false);
+      addHistoryItem(qrId, "Lỗi kết nối mạng", false, "Lỗi mạng");
+      showScanToast("Không thể kết nối Internet!", qrId, false);
+    } finally {
+      state.pendingCount--;
+      updatePendingBadge();
     }
-  } catch (err) {
-    console.error("Lỗi thực hiện điểm danh:", err);
-    handleScanError(qrId, "Không thể kết nối Internet hoặc lỗi CORS!");
+
+  } else {
+    // ── SINGLE MODE: hiện popup, khoá camera cho đến khi xác nhận ──
+    DOM.laserLine.style.display = 'none';
+    showResultLoading(qrId);
+
+    try {
+      const url = `${state.gasUrl}?scannedId=${encodeURIComponent(qrId)}&selectedDate=${encodeURIComponent(selectedDate)}`;
+      const response = await fetch(url, { method: 'GET' });
+
+      if (response.ok) {
+        const data = await response.json();
+        const resultMessage = data.result || '';
+
+        if (resultMessage.startsWith("SUCCESS:")) {
+          const fullName = resultMessage.replace("SUCCESS:", "").trim();
+          handleScanSuccess(qrId, fullName);
+        } else {
+          const errorDetail = resultMessage.replace("ERROR:", "").trim();
+          handleScanError(qrId, errorDetail);
+        }
+      } else {
+        handleScanError(qrId, `Lỗi máy chủ Google (HTTP ${response.status})`);
+      }
+    } catch (err) {
+      console.error("Lỗi thực hiện điểm danh:", err);
+      handleScanError(qrId, "Không thể kết nối Internet hoặc lỗi CORS!");
+    }
   }
 }
 
-// Xử lý khi Quét và Điểm danh THÀNH CÔNG
+// Xử lý khi Quét và Điểm danh THÀNH CÔNG (chỉ dùng ở single scan mode)
 function handleScanSuccess(id, fullName) {
-  // Phát âm thanh bíp bíp
   playAudioAlert(true);
-  
-  // Đọc tên người dùng qua loa (Text to Speech)
   speakVietnamese("Xin chào " + fullName);
-  
-  // Cập nhật giao diện thông báo
+
   DOM.resultPopup.className = "result-popup active success";
   DOM.resultIcon.innerHTML = '<i class="fa-solid fa-check"></i>';
   DOM.resultTitle.innerText = "ĐIỂM DANH THÀNH CÔNG";
   DOM.resultName.innerText = fullName;
   DOM.resultId.innerText = `Mã số: ${id}`;
-  
-  // Lưu lịch sử
+
   addHistoryItem(id, fullName, true, "Thành công");
-  
-  // Xử lý chế độ Quét tiếp theo
-  if (state.continuousScan) {
-    DOM.btnConfirmResult.style.display = 'none';
-    
-    // Tự động đóng popup sau 2.5 giây và quét tiếp
-    clearTimeout(state.autoCloseTimeout);
-    state.autoCloseTimeout = setTimeout(() => {
-      closeResultPopup();
-    }, 2500);
-  } else {
-    DOM.btnConfirmResult.style.display = 'block';
-    DOM.btnConfirmResult.innerText = "Xác nhận & Quét tiếp";
-  }
+
+  DOM.btnConfirmResult.style.display = 'block';
+  DOM.btnConfirmResult.innerText = "Xác nhận & Quét tiếp";
 }
 
 // Xử lý khi Quét THẤT BẠI (Lỗi hệ thống hoặc ID không khớp)
@@ -543,6 +596,36 @@ function closeResultPopup() {
   setTimeout(() => {
     state.isProcessing = false;
   }, 600);
+}
+
+// Toast nhanh trong vùng camera (chế độ liên tục)
+function showScanToast(text, id, isSuccess) {
+  DOM.scanToast.className = 'scan-toast ' + (isSuccess ? 'success-toast' : 'error-toast');
+  DOM.scanToastIcon.innerHTML = isSuccess
+    ? '<i class="fa-solid fa-circle-check"></i>'
+    : '<i class="fa-solid fa-triangle-exclamation"></i>';
+  DOM.scanToastName.textContent = text;
+  DOM.scanToastId.textContent = `Mã: ${id}`;
+
+  DOM.scanToast.classList.add('show');
+
+  clearTimeout(state.toastTimeout);
+  if (isSuccess) {
+    state.toastTimeout = setTimeout(() => {
+      DOM.scanToast.classList.remove('show');
+    }, 2000);
+  }
+  // Lỗi: toast giữ nguyên đến khi quét thành công lần tiếp
+}
+
+// Cập nhật badge số request đang pending
+function updatePendingBadge() {
+  if (state.pendingCount > 0) {
+    DOM.pendingIndicator.style.display = 'flex';
+    DOM.pendingText.textContent = state.pendingCount;
+  } else {
+    DOM.pendingIndicator.style.display = 'none';
+  }
 }
 
 // 10. Quản lý Lịch sử Quét (Local Session Logs)
