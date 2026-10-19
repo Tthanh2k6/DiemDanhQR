@@ -1,91 +1,91 @@
-# QR Attendance — Công cụ điểm danh cá nhân bằng mã QR
+# QR Attendance
 
-> **Lưu ý:** Đây là công cụ tác giả tự xây dựng để phục vụ việc điểm danh của chính mình cho một cộng đồng nhỏ. Không phải sản phẩm thương mại, không có hỗ trợ kỹ thuật chính thức. Ai muốn dùng thì tự cấu hình theo hướng dẫn bên dưới.
+**Quét một mã. Ghi nhận một người. Theo dõi ngay trên Google Sheets.**
 
----
+![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=111827)
+![PWA](https://img.shields.io/badge/PWA-5A0FC8?style=flat-square&logo=pwa&logoColor=white)
+![Google Sheets](https://img.shields.io/badge/Google_Sheets-34A853?style=flat-square&logo=googlesheets&logoColor=white)
 
-## Nó làm gì?
+Ứng dụng web điểm danh cho nhóm nhỏ: quét QR bằng camera, hiển thị tên và lưu kết quả theo ngày vào Google Sheets. Frontend là HTML/CSS/JavaScript; Google Apps Script tiếp nhận yêu cầu ghi dữ liệu nên không cần tự vận hành backend riêng.
 
-Mở trên điện thoại, bật camera, quét mã QR của từng thành viên → tự động ghi điểm danh vào Google Sheets. Không cần server riêng, không cần cài app từ store.
-
-**Luồng hoạt động:**
-
-```text
-Điện thoại quét QR  →  Gọi Google Apps Script  →  Ghi vào Google Sheets
-```
-
----
+[Tính năng](#tính-năng) · [Thiết lập](#thiết-lập) · [Chạy cục bộ](#chạy-cục-bộ) · [Cấu trúc](#cấu-trúc)
 
 ## Tính năng
 
-- Quét camera trực tiếp, nhận diện QR nhanh
-- Hai chế độ: **Quét liên tục** (không cần xác nhận) và **Quét từng người** (chờ xác nhận)
-- Phát âm thanh + đọc tên tiếng Việt khi điểm danh thành công
-- Lịch sử quét hiển thị ngay trên màn hình
-- Lưu kết quả trực tiếp vào Google Sheets theo ngày
-- Hỗ trợ chọn camera (góc rộng, camera trước, camera sau...)
-- Cài được lên màn hình chính như app thông thường (PWA)
-- Dark mode / Light mode
+- Quét liên tục hoặc quét từng người có xác nhận.
+- Chọn camera, hiển thị lịch sử quét, phát âm thanh và đọc tên tiếng Việt.
+- Chọn ngày điểm danh; lưu kết quả vào cột tương ứng trong bảng tính.
+- Giao diện sáng/tối và hỗ trợ thêm ứng dụng vào màn hình chính dưới dạng PWA.
+
+```mermaid
+flowchart LR
+    QR["Camera quét mã thành viên"] --> App["Ứng dụng PWA"]
+    App --> Script["Google Apps Script"]
+    Script --> Sheet["Google Sheets · Data"]
+    Script --> Result["Tên và trạng thái điểm danh"]
+```
+
+## Thiết lập
+
+### 1. Chuẩn bị bảng tính
+
+Tạo sheet có tên chính xác là **`Data`**, với hàng đầu là tiêu đề:
+
+| Cột | Nội dung mà script sử dụng |
+| --- | --- |
+| A | Mã thành viên, trùng nội dung mã QR, ví dụ `GT01` |
+| B | Tên thánh hoặc phần tên bổ sung; có thể để trống |
+| C | Họ tên |
+| D | Cột thông tin dự phòng |
+| E trở đi | Các ngày điểm danh theo định dạng `dd-MM-yyyy` |
+
+Giữ đủ bốn cột đầu trong hàng tiêu đề. Khi chưa có ngày cần điểm danh, script thêm cột ở cuối bảng và ghi `x` vào dòng của mã thành viên tìm được.
+
+### 2. Triển khai Apps Script
+
+1. Trong bảng tính, mở **Tiện ích mở rộng → Apps Script**.
+2. Dán mã từ [`google-apps-script.js`](google-apps-script.js), lưu dự án.
+3. Chọn **Triển khai mới → Ứng dụng web**.
+4. Đặt thực thi dưới tài khoản của bạn, quyền truy cập **Mọi người** để frontend gọi trực tiếp.
+5. Cấp quyền và sao chép URL kết thúc bằng `/exec`.
+
+Endpoint hiện không có lớp đăng nhập riêng cho người quét. Hãy quản lý URL triển khai và quyền chia sẻ bảng tính theo phạm vi nhóm sử dụng.
+
+### 3. Kết nối frontend
+
+Mở ứng dụng → **Cài đặt** → dán **Google Apps Script URL** → lưu và kiểm tra kết nối. Bật camera lần đầu để cấp quyền; sau đó có thể chọn ống kính trong phần cài đặt.
+
+## Chạy cục bộ
+
+Cần Node.js; server chỉ dùng thư viện có sẵn, không cần `npm install`.
+
+```powershell
+git clone https://github.com/Tthanh2k6/DiemDanhQR.git
+cd DiemDanhQR
+node server.js
+```
+
+Mở **http://localhost:8080** trên máy đang chạy server. Trên Windows có thể dùng `Chay_App.bat` để khởi động và mở trình duyệt.
+
+Để dùng camera trên điện thoại qua mạng, triển khai frontend qua **HTTPS**. Địa chỉ HTTP dạng IP nội bộ không tương đương `localhost` trên thiết bị và có thể bị trình duyệt chặn camera. Xem thêm [`Huong_dan_Hosting.md`](Huong_dan_Hosting.md).
+
+## Dùng như ứng dụng điện thoại
+
+- **Android/Chrome:** menu trình duyệt → Thêm vào màn hình chính.
+- **iOS/Safari:** Chia sẻ → Thêm vào màn hình chính.
+
+Khả năng cài PWA và đọc tên phụ thuộc trình duyệt. Việc ghi điểm danh vào Google Sheets vẫn cần kết nối mạng.
+
+## Cấu trúc
+
+| File | Vai trò |
+| --- | --- |
+| [`index.html`](index.html), [`style.css`](style.css) | Giao diện |
+| [`app.js`](app.js) | Camera, xử lý kết quả, cài đặt và gọi endpoint |
+| [`google-apps-script.js`](google-apps-script.js) | Tìm thành viên và ghi bảng điểm danh |
+| [`manifest.json`](manifest.json), [`sw.js`](sw.js) | Cấu hình PWA và service worker |
+| [`server.js`](server.js) | Server tĩnh để chạy thử cục bộ |
 
 ---
 
-## Yêu cầu
-
-- Một tài khoản Google
-- Một file Google Sheets đã có sẵn danh sách thành viên và mã QR tương ứng
-- Điện thoại có camera, dùng Chrome (Android) hoặc Safari (iOS)
-
----
-
-## Cài đặt
-
-### Bước 1 — Cắm script vào Google Sheets
-
-1. Mở Google Sheets của bạn
-2. Chọn **Tiện ích mở rộng → Apps Script**
-3. Xóa toàn bộ code mặc định, dán nội dung file [`google-apps-script.js`](google-apps-script.js) vào
-4. Nhấn **Lưu**
-
-### Bước 2 — Triển khai thành Web App
-
-1. Trong Apps Script, nhấn **Triển khai → Triển khai mới**
-2. Chọn loại: **Ứng dụng web**
-3. Cấu hình:
-   - Thực thi dưới danh nghĩa: **Tôi**
-   - Ai có quyền truy cập: **Mọi người**
-4. Nhấn **Triển khai**, cấp quyền nếu Google yêu cầu
-5. Sao chép **URL ứng dụng web** (`https://script.google.com/macros/s/.../exec`)
-
-### Bước 3 — Kết nối App với Sheets
-
-1. Mở app (file `index.html` hoặc link GitHub Pages)
-2. Nhấn biểu tượng **⚙️ Cài đặt** góc trên phải
-3. Dán URL vừa sao chép vào ô **Google Apps Script URL**
-4. Nhấn **Lưu cài đặt**
-5. Đèn trạng thái chuyển xanh = đã kết nối
-
----
-
-## Chọn camera (tùy chọn)
-
-Vào **⚙️ Cài đặt → Lựa chọn Camera** để chọn ống kính cụ thể (góc rộng, camera trước, v.v.). Cần bật camera ít nhất một lần trước để trình duyệt cấp quyền enumerate danh sách.
-
----
-
-## Cài lên điện thoại như app (PWA)
-
-**Android / Chrome:** Nhấn biểu tượng 3 chấm → *Thêm vào màn hình chính*
-
-**iOS / Safari:** Nhấn nút Chia sẻ → *Thêm vào MH chính*
-
----
-
-## Hosting miễn phí
-
-Đẩy code lên GitHub, bật **GitHub Pages** từ nhánh `main` là xong. Xem chi tiết trong file [`Huong_dan_Hosting.md`](Huong_dan_Hosting.md).
-
----
-
-## Giấy phép
-
-Không có. Dùng thoải mái, sửa thoải mái — nhưng đừng hỏi tác giả khi gặp lỗi.
+**Trần Trung Thành** · [@Tthanh2k6](https://github.com/Tthanh2k6)
