@@ -1,4 +1,4 @@
-const CACHE_NAME = 'qr-attendance-cache-v1';
+const CACHE_NAME = 'qr-attendance-cache-v2';
 
 // Các tài nguyên cần tải trước và lưu trữ tạm thời
 const ASSETS_TO_CACHE = [
@@ -7,7 +7,6 @@ const ASSETS_TO_CACHE = [
   'style.css',
   'app.js',
   'manifest.json',
-  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js',
   'https://cdn-icons-png.flaticon.com/512/3022/3022250.png'
 ];

@@ -10,46 +10,68 @@ const state = {
   recentScans: new Map(),     // Debounce: QR code → timestamp quét gần nhất
   SCAN_DEBOUNCE_MS: 3000,     // Không quét lại cùng mã trong 3 giây
   pendingCount: 0,            // Số API call đang chờ phản hồi
+  sessionPresent: 0,          // Số lượt có mặt trong phiên này
   isCameraActive: false,
   html5QrCode: null,
   cameras: [],                // Danh sách camera khả dụng
   activeCameraId: null,       // ID camera đang dùng
   selectedCameraId: localStorage.getItem('qr_attendance_camera_id') || '', // Camera người dùng chọn
   scanHistory: (() => { try { return JSON.parse(localStorage.getItem('qr_attendance_history')) || []; } catch(e) { return []; } })(),
-  theme: localStorage.getItem('qr_attendance_theme') || 'dark',
+  theme: localStorage.getItem('qr_attendance_theme') || 'light', // light | dark | system
+  pendingTheme: null,         // Theme đang xem thử trong cài đặt
+  lastCheckText: '',          // Kết quả kiểm tra kết nối gần nhất
   continuousScan: localStorage.getItem('qr_attendance_continuous') !== 'false', // Default true
   voiceOutput: localStorage.getItem('qr_attendance_voice') !== 'false', // Default true
   autoCloseTimeout: null,
   toastTimeout: null
 };
 
+const WEEKDAYS = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+
 // 2. Định nghĩa các phần tử DOM (DOM Elements)
 const DOM = {
   html: document.documentElement,
+  body: document.body,
+  themeColorMeta: document.querySelector('meta[name="theme-color"]'),
   gasUrlInput: document.getElementById('gasUrl'),
   attendanceDateInput: document.getElementById('attendanceDate'),
+  datePickers: document.querySelectorAll('.js-pick-date'),
   btnThemeToggle: document.getElementById('btnThemeToggle'),
   btnSettings: document.getElementById('btnSettings'),
   settingsModal: document.getElementById('settingsModal'),
   btnSaveSettings: document.getElementById('btnSaveSettings'),
   btnCancelSettings: document.getElementById('btnCancelSettings'),
+  btnCloseSettings: document.getElementById('btnCloseSettings'),
+  btnTestConn: document.getElementById('btnTestConn'),
+  sheetStatusDot: document.getElementById('sheetStatusDot'),
+  sheetStatusText: document.getElementById('sheetStatusText'),
+  themeSegment: document.getElementById('themeSegment'),
   connStatusDot: document.getElementById('connStatusDot'),
   connStatusText: document.getElementById('connStatusText'),
   dateIndicator: document.getElementById('dateIndicator'),
+  dateChipText: document.getElementById('dateChipText'),
+  sessionCount: document.getElementById('sessionCount'),
   btnStartCamera: document.getElementById('btnStartCamera'),
   cameraPlaceholder: document.getElementById('cameraPlaceholder'),
   scannerOverlay: document.getElementById('scannerOverlay'),
   laserLine: document.getElementById('laserLine'),
-  chkContinuous: document.getElementById('chkContinuous'),
+  statusPillText: document.getElementById('statusPillText'),
+  modeSegment: document.getElementById('modeSegment'),
+  modeDesc: document.getElementById('modeDesc'),
   chkVoice: document.getElementById('chkVoice'),
-  
+
   // Hộp thoại Kết quả (Result Popup - single scan mode)
   resultPopup: document.getElementById('resultPopup'),
   resultIcon: document.getElementById('resultIcon'),
   resultTitle: document.getElementById('resultTitle'),
   resultName: document.getElementById('resultName'),
   resultId: document.getElementById('resultId'),
+  resultDate: document.getElementById('resultDate'),
+  resultTime: document.getElementById('resultTime'),
+  resultHint: document.getElementById('resultHint'),
   btnConfirmResult: document.getElementById('btnConfirmResult'),
+  btnSkipResult: document.getElementById('btnSkipResult'),
 
   // Toast nhanh (continuous mode)
   scanToast: document.getElementById('scanToast'),
@@ -67,6 +89,18 @@ const DOM = {
   logCount: document.getElementById('logCount')
 };
 
+// Icon SVG từ bộ symbol trong index.html
+function icon(name) {
+  return `<svg class="ic"><use href="#i-${name}"/></svg>`;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+const BTN_START_HTML = `${icon('camera')} Bật camera điểm danh`;
+const BTN_STOP_HTML = `${icon('power')} Tắt camera`;
+
 // 3. Khởi tạo Trình tổng hợp Âm thanh (Web Audio API Synthesizer)
 // Dùng Web Audio để phát tiếng bíp trực tiếp mà không cần file âm thanh
 let audioCtx = null;
@@ -77,18 +111,18 @@ function playAudioAlert(isSuccess) {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    
+
     // Đảm bảo AudioContext không bị treo
     if (audioCtx.state === 'suspended') {
       audioCtx.resume();
     }
-    
+
     const osc = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
-    
+
     osc.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-    
+
     if (isSuccess) {
       // Âm thanh thành công: 2 tiếng bíp cao (Happy Chirp)
       osc.type = 'sine';
@@ -96,7 +130,7 @@ function playAudioAlert(isSuccess) {
       gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
       osc.start();
       osc.stop(audioCtx.currentTime + 0.08);
-      
+
       setTimeout(() => {
         const osc2 = audioCtx.createOscillator();
         const gainNode2 = audioCtx.createGain();
@@ -133,27 +167,27 @@ if (window.speechSynthesis) {
 
 function speakVietnamese(text) {
   if (!state.voiceOutput || !window.speechSynthesis) return;
-  
+
   try {
     // Dừng các giọng đọc đang phát dở
     window.speechSynthesis.cancel();
-    
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'vi-VN';
     utterance.rate = 0.95; // Tốc độ vừa phải, dễ nghe
     utterance.pitch = 1.05; // Cao độ sáng ấm
-    
+
     // Tìm kiếm giọng đọc tiếng Việt chuẩn
-    const viVoice = voiceList.find(voice => 
-      voice.lang.includes('vi') || 
-      voice.lang.includes('VI') || 
+    const viVoice = voiceList.find(voice =>
+      voice.lang.includes('vi') ||
+      voice.lang.includes('VI') ||
       voice.name.toLowerCase().includes('vietnam')
     );
-    
+
     if (viVoice) {
       utterance.voice = viVoice;
     }
-    
+
     window.speechSynthesis.speak(utterance);
   } catch (err) {
     console.error("Lỗi phát giọng nói:", err);
@@ -164,7 +198,7 @@ function speakVietnamese(text) {
 document.addEventListener('DOMContentLoaded', () => {
   initApp();
   registerEvents();
-  
+
   // Đăng ký Service Worker cho PWA (Hỗ trợ cài đặt thành App trên điện thoại)
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js')
@@ -174,18 +208,17 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function initApp() {
-  // Cài đặt Theme mặc định
-  DOM.html.setAttribute('data-theme', state.theme);
-  updateThemeIcon();
-  
+  // Cài đặt Theme
+  applyTheme(state.theme);
+
   // Nạp cấu hình lưu trữ
   if (state.gasUrl) {
     DOM.gasUrlInput.value = state.gasUrl;
-    testSheetConnection(state.gasUrl);
+    refreshConnection();
   } else {
-    updateConnectionStatus(false, "Chưa cấu hình Google Sheet");
+    updateConnectionStatus('none', "Chưa cấu hình Google Sheets");
   }
-  
+
   // Điền ngày hiện tại dạng YYYY-MM-DD
   const today = new Date();
   const year = today.getFullYear();
@@ -193,44 +226,72 @@ function initApp() {
   const day = String(today.getDate()).padStart(2, '0');
   const localDateStr = `${year}-${month}-${day}`;
   DOM.attendanceDateInput.value = localDateStr;
-  
+
   // Hiển thị ngày lên màn hình
   updateDateIndicator(localDateStr);
-  
-  // Đặt các ô kiểm Toggle đúng trạng thái lưu trữ
-  DOM.chkContinuous.checked = state.continuousScan;
+  updateSessionCount();
+
+  // Đặt chế độ quét & giọng đọc đúng trạng thái lưu trữ
+  updateModeUI();
   DOM.chkVoice.checked = state.voiceOutput;
-  
+
   // Nạp và vẽ Lịch sử
   renderHistory();
 }
 
 // 6. Đăng ký các sự kiện tương tác (Event Listeners)
 function registerEvents() {
-  // Theme Toggle
-  DOM.btnThemeToggle.addEventListener('click', toggleTheme);
-  
+  // Theme Toggle (Sáng ⇄ Tối)
+  DOM.btnThemeToggle.addEventListener('click', () => {
+    setTheme(resolveTheme(state.theme) === 'dark' ? 'light' : 'dark');
+  });
+
+  systemDark.addEventListener('change', () => {
+    applyTheme(state.pendingTheme || state.theme);
+  });
+
   // Settings Dialog Control
-  DOM.btnSettings.addEventListener('click', () => {
-    DOM.gasUrlInput.value = state.gasUrl;
-    DOM.settingsModal.classList.add('active');
-    loadCameraOptions();
+  DOM.btnSettings.addEventListener('click', openSettings);
+  DOM.btnCancelSettings.addEventListener('click', closeSettings);
+  DOM.btnCloseSettings.addEventListener('click', closeSettings);
+  DOM.settingsModal.addEventListener('click', (e) => {
+    if (e.target === DOM.settingsModal) closeSettings();
   });
-  
-  DOM.btnCancelSettings.addEventListener('click', () => {
-    DOM.settingsModal.classList.remove('active');
+
+  DOM.themeSegment.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-theme-opt]');
+    if (!btn) return;
+    // Xem thử ngay, chỉ lưu khi nhấn "Lưu cài đặt"
+    state.pendingTheme = btn.dataset.themeOpt;
+    applyTheme(state.pendingTheme);
   });
-  
+
+  DOM.btnTestConn.addEventListener('click', async () => {
+    const url = DOM.gasUrlInput.value.trim();
+    if (!url) {
+      setStatus(DOM.sheetStatusDot, DOM.sheetStatusText, 'error', 'Chưa nhập URL Web App');
+      return;
+    }
+    DOM.btnTestConn.disabled = true;
+    setStatus(DOM.sheetStatusDot, DOM.sheetStatusText, 'checking', 'Đang kiểm tra kết nối...');
+    const res = await checkConnection(url);
+    setStatus(DOM.sheetStatusDot, DOM.sheetStatusText, res.status, sheetStatusMessage(res));
+    if (url === state.gasUrl) updateConnectionStatus(res.status, res.message);
+    DOM.btnTestConn.disabled = false;
+  });
+
   DOM.btnSaveSettings.addEventListener('click', () => {
     const newUrl = DOM.gasUrlInput.value.trim();
     if (newUrl) {
-      state.gasUrl = newUrl;
-      localStorage.setItem('qr_attendance_gas_url', newUrl);
-      testSheetConnection(newUrl);
+      if (newUrl !== state.gasUrl) {
+        state.gasUrl = newUrl;
+        localStorage.setItem('qr_attendance_gas_url', newUrl);
+        refreshConnection();
+      }
     } else {
       state.gasUrl = '';
       localStorage.removeItem('qr_attendance_gas_url');
-      updateConnectionStatus(false, "Chưa cấu hình Google Sheet");
+      updateConnectionStatus('none', "Chưa cấu hình Google Sheets");
     }
 
     // Lưu camera đã chọn
@@ -242,84 +303,150 @@ function registerEvents() {
       localStorage.removeItem('qr_attendance_camera_id');
     }
 
+    // Lưu giao diện
+    if (state.pendingTheme) setTheme(state.pendingTheme);
+    state.pendingTheme = null;
+
     DOM.settingsModal.classList.remove('active');
   });
-  
-  // Date Input change
+
+  // Chọn ngày: mở bộ chọn ngày gốc của trình duyệt
+  DOM.datePickers.forEach(el => el.addEventListener('click', openDatePicker));
+
   DOM.attendanceDateInput.addEventListener('change', (e) => {
     updateDateIndicator(e.target.value);
   });
-  
-  // Toggles Change
-  DOM.chkContinuous.addEventListener('change', (e) => {
-    state.continuousScan = e.target.checked;
+
+  // Chế độ quét (Liên tục / Từng người)
+  DOM.modeSegment.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-mode]');
+    if (!btn) return;
+    state.continuousScan = btn.dataset.mode === 'continuous';
     localStorage.setItem('qr_attendance_continuous', state.continuousScan);
+    updateModeUI();
   });
-  
+
   DOM.chkVoice.addEventListener('change', (e) => {
     state.voiceOutput = e.target.checked;
     localStorage.setItem('qr_attendance_voice', state.voiceOutput);
   });
-  
+
   // Start/Stop Camera
   DOM.btnStartCamera.addEventListener('click', toggleCamera);
 
-  // Switch Camera
-  DOM.btnSwitchCamera.addEventListener('click', switchCamera);
-  
-  // Result Confirmation Close
-  DOM.btnConfirmResult.addEventListener('click', () => {
-    closeResultPopup();
-  });
-  
-  // Close Result when tapping overlay in Continuous mode
-  DOM.resultPopup.addEventListener('click', (e) => {
-    if (e.target === DOM.resultPopup && !state.continuousScan) {
-      closeResultPopup();
+  // Switch Camera (khi camera tắt thì mở cài đặt để chọn camera)
+  DOM.btnSwitchCamera.addEventListener('click', () => {
+    if (state.isCameraActive) {
+      switchCamera();
+    } else {
+      openSettings();
     }
   });
+
+  // Result Confirmation Close
+  DOM.btnConfirmResult.addEventListener('click', closeResultPopup);
+  DOM.btnSkipResult.addEventListener('click', closeResultPopup);
 }
 
 // 7. Các hàm tiện ích giao diện
-function toggleTheme() {
-  state.theme = state.theme === 'dark' ? 'light' : 'dark';
-  DOM.html.setAttribute('data-theme', state.theme);
-  localStorage.setItem('qr_attendance_theme', state.theme);
-  updateThemeIcon();
+function resolveTheme(theme) {
+  if (theme === 'system') return systemDark.matches ? 'dark' : 'light';
+  return theme === 'dark' ? 'dark' : 'light';
 }
 
-function updateThemeIcon() {
-  const icon = DOM.btnThemeToggle.querySelector('i');
-  if (state.theme === 'dark') {
-    icon.className = 'fa-solid fa-sun';
-  } else {
-    icon.className = 'fa-solid fa-moon';
-  }
+function applyTheme(theme) {
+  const resolved = resolveTheme(theme);
+  DOM.html.setAttribute('data-theme', resolved);
+  DOM.themeColorMeta.setAttribute('content', resolved === 'dark' ? '#0E1012' : '#F3F4F1');
+  DOM.btnThemeToggle.innerHTML = icon(resolved === 'dark' ? 'sun' : 'moon');
+  DOM.themeSegment.querySelectorAll('[data-theme-opt]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.themeOpt === theme);
+  });
+}
+
+function setTheme(theme) {
+  state.theme = theme;
+  localStorage.setItem('qr_attendance_theme', theme);
+  applyTheme(theme);
+}
+
+function openSettings() {
+  DOM.gasUrlInput.value = state.gasUrl;
+  state.pendingTheme = null;
+  applyTheme(state.theme);
+  // Đồng bộ trạng thái kết nối của header vào bảng cài đặt
+  DOM.sheetStatusDot.className = DOM.connStatusDot.className;
+  DOM.sheetStatusText.textContent = state.gasUrl ? (state.lastCheckText || DOM.connStatusText.textContent) : 'Chưa nhập URL Web App';
+  DOM.settingsModal.classList.add('active');
+  loadCameraOptions();
+}
+
+function closeSettings() {
+  // Hủy xem thử theme
+  state.pendingTheme = null;
+  applyTheme(state.theme);
+  DOM.settingsModal.classList.remove('active');
+}
+
+function openDatePicker() {
+  const input = DOM.attendanceDateInput;
+  try {
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+  } catch (e) { /* Trình duyệt chặn showPicker → dùng cách dự phòng */ }
+  input.focus();
+  input.click();
+}
+
+function updateModeUI() {
+  const mode = state.continuousScan ? 'continuous' : 'single';
+  DOM.modeSegment.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  DOM.modeDesc.textContent = state.continuousScan
+    ? 'Quét mã kế tiếp ngay, không cần chờ kết quả.'
+    : 'Hiện kết quả và chờ xác nhận sau mỗi lượt quét.';
+  DOM.statusPillText.textContent = `Đang quét · ${state.continuousScan ? 'Liên tục' : 'Từng người'}`;
+}
+
+function formatDisplayDate(dateStr) {
+  const parts = (dateStr || '').split('-');
+  if (parts.length !== 3) return '';
+  const d = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+  return `${WEEKDAYS[d.getDay()]}, ${parts[2]}/${parts[1]}/${parts[0]}`;
 }
 
 function updateDateIndicator(dateStr) {
-  if (!dateStr) return;
-  const parts = dateStr.split('-');
-  if (parts.length === 3) {
-    DOM.dateIndicator.innerText = `${parts[2]}/${parts[1]}/${parts[0]}`;
-  }
+  const text = formatDisplayDate(dateStr);
+  if (!text) return;
+  DOM.dateIndicator.innerText = text;
+  DOM.dateChipText.innerText = text;
 }
 
-function updateConnectionStatus(success, message) {
-  if (success) {
-    DOM.connStatusDot.className = 'status-dot active';
-    DOM.connStatusText.innerText = message || "Đã kết nối Google Sheet";
-    DOM.connStatusText.style.color = 'var(--success)';
-  } else {
-    DOM.connStatusDot.className = 'status-dot';
-    DOM.connStatusText.innerText = message || "Không có kết nối";
-    DOM.connStatusText.style.color = 'var(--error)';
-  }
+function updateSessionCount() {
+  DOM.sessionCount.textContent = `Phiên này: ${state.sessionPresent} có mặt`;
+}
+
+function setStatus(dotEl, textEl, status, message) {
+  dotEl.className = 'status-dot' + (status === 'none' ? '' : ' ' + status);
+  textEl.textContent = message;
+}
+
+function updateConnectionStatus(status, message) {
+  setStatus(DOM.connStatusDot, DOM.connStatusText, status, message);
+}
+
+function sheetStatusMessage(res) {
+  if (res.status !== 'ok') return res.message;
+  const now = new Date();
+  return `Đã kết nối · kiểm tra lúc ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 }
 
 // Liệt kê và hiển thị danh sách camera trong settings
 async function loadCameraOptions() {
-  DOM.cameraSelect.innerHTML = '<option value="">⏳ Đang tải danh sách camera...</option>';
+  DOM.cameraSelect.innerHTML = '<option value="">Đang tải danh sách camera...</option>';
   DOM.camHint.textContent = '';
 
   try {
@@ -332,12 +459,12 @@ async function loadCameraOptions() {
       return;
     }
 
-    let options = '<option value="">🔄 Tự động (ưu tiên góc rộng)</option>';
+    let options = '<option value="">Tự động (ưu tiên góc rộng)</option>';
     cameras.forEach((cam, i) => {
       const rawLabel = cam.label || '';
       const label = formatCameraLabel(rawLabel, i, cameras.length);
       const selected = cam.id === state.selectedCameraId ? ' selected' : '';
-      options += `<option value="${cam.id}"${selected}>${label}</option>`;
+      options += `<option value="${escapeHtml(cam.id)}"${selected}>${escapeHtml(label)}</option>`;
     });
 
     DOM.cameraSelect.innerHTML = options;
@@ -348,54 +475,58 @@ async function loadCameraOptions() {
       if (wide) DOM.cameraSelect.value = wide.id;
     }
 
-    DOM.camHint.textContent = `Tìm thấy ${cameras.length} camera. Chọn xong nhấn "Lưu cài đặt".`;
+    DOM.camHint.textContent = `Tìm thấy ${cameras.length} camera. Chọn xong nhấn “Lưu cài đặt”.`;
   } catch (e) {
-    DOM.cameraSelect.innerHTML = '<option value="">⚠️ Cần cấp quyền camera trước</option>';
+    DOM.cameraSelect.innerHTML = '<option value="">Cần cấp quyền camera trước</option>';
     DOM.camHint.textContent = 'Bật camera một lần rồi vào lại đây để tải danh sách.';
   }
 }
 
 function formatCameraLabel(rawLabel, index, total) {
-  const l = rawLabel.toLowerCase();
   const isWide = /wide|ultra|0\.6/i.test(rawLabel);
   const isFront = /front|user|facing front/i.test(rawLabel);
   const isBack = /back|rear|environment|facing back/i.test(rawLabel);
 
-  // Đếm số camera cùng loại để đánh số
-  if (isWide) return `📷 Camera Góc Rộng (0.6×)`;
-  if (isFront) return `🤳 Camera Trước`;
-  if (isBack) return `📷 Camera Sau`;
-  if (!rawLabel) return `📷 Camera ${index + 1}`;
-  return `📷 ${rawLabel}`;
+  if (isWide) return `Camera góc rộng (0.6×)`;
+  if (isFront) return `Camera trước (Front camera)`;
+  if (isBack) return `Camera sau (Back camera)`;
+  if (!rawLabel) return `Camera ${index + 1}`;
+  return rawLabel;
 }
 
-// Kiểm tra kết nối đến Google Sheets
-async function testSheetConnection(url) {
-  updateConnectionStatus(false, "Đang kiểm tra kết nối...");
+// Kiểm tra kết nối đến Google Sheets, trả về { status, message }
+async function checkConnection(url) {
   try {
     // Gửi yêu cầu với mã thử nghiệm
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
-    
+
     const testUrl = `${url}?scannedId=TEST_CONN&selectedDate=2026-05-24`;
     const response = await fetch(testUrl, { method: 'GET', signal: controller.signal });
     clearTimeout(timeoutId);
-    
+
     if (response.ok) {
       const data = await response.json();
       if (data && data.result && data.result.includes('CONNECTION_OK')) {
-        updateConnectionStatus(true, "Bảng tính: Sẵn sàng");
-      } else {
-        // GAS cũ chưa có check TEST_CONN → sẽ tạo cột 24/5. Cần redeploy GAS mới!
-        updateConnectionStatus(false, "⚠️ GAS cũ - Hãy cập nhật & Redeploy Google Apps Script!");
+        return { status: 'ok', message: "Đã kết nối Google Sheets" };
       }
-    } else {
-      updateConnectionStatus(false, "Lỗi kết nối Web App (HTTP " + response.status + ")");
+      // GAS cũ chưa có check TEST_CONN → sẽ tạo cột 24/5. Cần redeploy GAS mới!
+      return { status: 'error', message: "GAS cũ – hãy cập nhật & Redeploy Apps Script" };
     }
+    return { status: 'error', message: "Lỗi kết nối Web App (HTTP " + response.status + ")" };
   } catch (err) {
     console.error("Lỗi test connection:", err);
-    updateConnectionStatus(false, "Không thể kết nối đến URL Web App!");
+    return { status: 'error', message: "Không thể kết nối đến URL Web App" };
   }
+}
+
+async function refreshConnection() {
+  updateConnectionStatus('checking', "Đang kiểm tra kết nối...");
+  const url = state.gasUrl;
+  const res = await checkConnection(url);
+  if (url !== state.gasUrl) return; // URL đã đổi trong lúc chờ
+  updateConnectionStatus(res.status, res.message);
+  state.lastCheckText = sheetStatusMessage(res);
 }
 
 // 8. Quản lý Camera quét QR (html5-qrcode)
@@ -407,10 +538,23 @@ function toggleCamera() {
   }
 }
 
+function getScanConfig() {
+  return {
+    fps: 10,
+    qrbox: function(width, height) {
+      const size = Math.min(width, height) * 0.65;
+      return { width: size, height: size };
+    },
+    aspectRatio: 1.0
+  };
+}
+
 async function startScanning() {
   if (!state.gasUrl) {
-    alert("Vui lòng click vào biểu tượng Răng cưa cài đặt ở góc trên bên phải để cấu hình URL Google Sheet trước!");
-    DOM.btnSettings.click();
+    // Chưa cấu hình URL → mở cài đặt để nhập
+    openSettings();
+    setStatus(DOM.sheetStatusDot, DOM.sheetStatusText, 'error', 'Nhập URL Web App để bắt đầu điểm danh');
+    DOM.gasUrlInput.focus();
     return;
   }
 
@@ -421,20 +565,13 @@ async function startScanning() {
   }
 
   DOM.btnStartCamera.disabled = true;
-  DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Đang khởi động camera...';
+  DOM.btnStartCamera.innerHTML = '<span class="spinner"></span> Đang khởi động camera...';
 
   if (!state.html5QrCode) {
     state.html5QrCode = new Html5Qrcode("reader");
   }
 
-  const config = {
-    fps: 10,
-    qrbox: function(width, height) {
-      const size = Math.min(width, height) * 0.65;
-      return { width: size, height: size };
-    },
-    aspectRatio: 1.0
-  };
+  const config = getScanConfig();
 
   // Dùng camera đã chọn trong cài đặt; nếu chưa chọn thì tự chọn góc rộng
   let primaryCam = { facingMode: "environment" };
@@ -463,13 +600,11 @@ async function startScanning() {
   const onStarted = () => {
     state.isCameraActive = true;
     DOM.btnStartCamera.disabled = false;
-    DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-power-off"></i> Tắt Camera Điểm Danh';
-    DOM.btnStartCamera.style.background = 'linear-gradient(135deg, var(--error), #d90429)';
-    DOM.btnStartCamera.style.boxShadow = '0 10px 25px var(--error-glow)';
+    DOM.btnStartCamera.innerHTML = BTN_STOP_HTML;
+    DOM.btnStartCamera.classList.replace('btn-accent', 'btn-ink');
+    DOM.body.classList.add('scanning');
     DOM.cameraPlaceholder.style.display = 'none';
-    DOM.scannerOverlay.style.display = 'block';
     DOM.laserLine.style.display = 'block';
-    DOM.btnSwitchCamera.style.display = 'flex';
   };
 
   const onFailed = (err, retried) => {
@@ -483,7 +618,7 @@ async function startScanning() {
       console.error("Không mở được camera:", err);
       alert("Không thể truy cập camera của bạn! Vui lòng cấp quyền camera cho trang web trong phần cài đặt trình duyệt.");
       DOM.btnStartCamera.disabled = false;
-      DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-camera"></i> Bật Camera Điểm Danh';
+      DOM.btnStartCamera.innerHTML = BTN_START_HTML;
     }
   };
 
@@ -495,22 +630,20 @@ async function startScanning() {
 function stopScanning() {
   if (state.html5QrCode && state.isCameraActive) {
     DOM.btnStartCamera.disabled = true;
-    DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Đang tắt camera...';
-    
+    DOM.btnStartCamera.innerHTML = '<span class="spinner"></span> Đang tắt camera...';
+
     state.html5QrCode.stop().then(() => {
       state.isCameraActive = false;
       DOM.btnStartCamera.disabled = false;
-      DOM.btnStartCamera.innerHTML = '<i class="fa-solid fa-camera"></i> Bật Camera Điểm Danh';
-      DOM.btnStartCamera.style.background = '';
-      DOM.btnStartCamera.style.boxShadow = '';
-      
+      DOM.btnStartCamera.innerHTML = BTN_START_HTML;
+      DOM.btnStartCamera.classList.replace('btn-ink', 'btn-accent');
+
       // Ẩn khung quét laser + reset toast/pending
+      DOM.body.classList.remove('scanning');
       DOM.cameraPlaceholder.style.display = 'flex';
-      DOM.scannerOverlay.style.display = 'none';
       DOM.laserLine.style.display = 'none';
       DOM.scanToast.classList.remove('show');
       DOM.pendingIndicator.style.display = 'none';
-      DOM.btnSwitchCamera.style.display = 'none';
       state.pendingCount = 0;
       state.activeCameraId = null;
       state.recentScans.clear();
@@ -526,7 +659,7 @@ function stopScanning() {
 async function switchCamera() {
   if (!state.isCameraActive) return;
 
-  DOM.btnSwitchCamera.innerHTML = '<i class="fa-solid fa-camera-rotate fa-spin"></i>';
+  DOM.btnSwitchCamera.classList.add('busy');
 
   try {
     // Lấy lại danh sách camera mới nhất từ trình duyệt
@@ -536,10 +669,7 @@ async function switchCamera() {
       state.cameras = cameras;
     }
 
-    if (!cameras || cameras.length < 2) {
-      DOM.btnSwitchCamera.innerHTML = '<i class="fa-solid fa-camera-rotate"></i>';
-      return;
-    }
+    if (!cameras || cameras.length < 2) return;
 
     const currentIdx = cameras.findIndex(c => c.id === state.activeCameraId);
     const nextIdx = (currentIdx + 1) % cameras.length;
@@ -548,20 +678,11 @@ async function switchCamera() {
     await state.html5QrCode.stop();
     state.activeCameraId = next.id;
 
-    const config = {
-      fps: 10,
-      qrbox: function(width, height) {
-        const size = Math.min(width, height) * 0.65;
-        return { width: size, height: size };
-      },
-      aspectRatio: 1.0
-    };
-
-    await state.html5QrCode.start(next.id, config, onQrCodeSuccess, onQrCodeError);
+    await state.html5QrCode.start(next.id, getScanConfig(), onQrCodeSuccess, onQrCodeError);
   } catch (err) {
     console.error("Lỗi đổi camera:", err);
   } finally {
-    DOM.btnSwitchCamera.innerHTML = '<i class="fa-solid fa-camera-rotate"></i>';
+    DOM.btnSwitchCamera.classList.remove('busy');
   }
 }
 
@@ -593,6 +714,32 @@ function onQrCodeError(errorMessage) {
   // Hàm này chạy liên tục khi quét không thấy mã, bỏ qua để tránh rác log
 }
 
+// Chuyển thông báo lỗi từ Apps Script thành tiêu đề ngắn + gợi ý
+function describeError(message) {
+  if (/Không tìm thấy ID/i.test(message)) {
+    return {
+      title: 'Không tìm thấy mã',
+      short: 'Chưa có trong sheet “Data”',
+      hint: 'Mã này chưa có trong sheet “Data”. Kiểm tra lại thẻ hoặc thêm thành viên.'
+    };
+  }
+  if (/Không tìm thấy sheet/i.test(message)) {
+    return {
+      title: 'Thiếu sheet “Data”',
+      short: 'Bảng tính chưa có sheet “Data”',
+      hint: 'Bảng tính chưa có sheet tên “Data”. Tạo sheet này rồi quét lại.'
+    };
+  }
+  if (/kết nối|Internet|CORS|mạng/i.test(message)) {
+    return {
+      title: 'Lỗi kết nối',
+      short: 'Không thể kết nối Internet',
+      hint: 'Không thể kết nối Internet hoặc lỗi CORS. Kiểm tra mạng rồi quét lại.'
+    };
+  }
+  return { title: 'Có lỗi xảy ra', short: message, hint: escapeHtml(message) };
+}
+
 // 9. Xử lý logic Điểm Danh qua API Google Sheets
 async function performAttendance(qrId) {
   const selectedDate = DOM.attendanceDateInput.value;
@@ -619,14 +766,14 @@ async function performAttendance(qrId) {
           const fullName = resultMessage.replace("SUCCESS:", "").trim();
           playAudioAlert(true);
           speakVietnamese("Xin chào " + fullName);
-          addHistoryItem(qrId, fullName, true, "Thành công");
-          showScanToast(fullName, qrId, true);
+          addHistoryItem(qrId, fullName, true, "Có mặt");
+          showScanToast(fullName, `${qrId} · Đã ghi vào Google Sheets`, true);
         } else {
-          const errorDetail = resultMessage.replace("ERROR:", "").trim();
+          const err = describeError(resultMessage.replace("ERROR:", "").trim());
           playAudioAlert(false);
           speakVietnamese("Lỗi điểm danh");
-          addHistoryItem(qrId, errorDetail, false, "Thất bại");
-          showScanToast(errorDetail, qrId, false);
+          addHistoryItem(qrId, err.title, false, "Lỗi");
+          showScanToast(err.title, `${qrId} · ${err.short}`, false);
         }
       } else {
         const errMsg = `Lỗi máy chủ HTTP ${response.status}`;
@@ -637,8 +784,8 @@ async function performAttendance(qrId) {
     } catch (err) {
       console.error("Lỗi thực hiện điểm danh:", err);
       playAudioAlert(false);
-      addHistoryItem(qrId, "Lỗi kết nối mạng", false, "Lỗi mạng");
-      showScanToast("Không thể kết nối Internet!", qrId, false);
+      addHistoryItem(qrId, "Lỗi kết nối mạng", false, "Lỗi");
+      showScanToast("Lỗi kết nối mạng", `${qrId} · Không thể kết nối Internet`, false);
     } finally {
       state.pendingCount--;
       updatePendingBadge();
@@ -679,63 +826,68 @@ function handleScanSuccess(id, fullName) {
   playAudioAlert(true);
   speakVietnamese("Xin chào " + fullName);
 
+  const now = new Date();
+  const dateParts = DOM.attendanceDateInput.value.split('-');
+
   DOM.resultPopup.className = "result-popup active success";
-  DOM.resultIcon.innerHTML = '<i class="fa-solid fa-check"></i>';
-  DOM.resultTitle.innerText = "ĐIỂM DANH THÀNH CÔNG";
+  DOM.resultIcon.innerHTML = `<span>${icon('check')}</span>`;
+  DOM.resultTitle.innerText = "Điểm danh thành công";
   DOM.resultName.innerText = fullName;
-  DOM.resultId.innerText = `Mã số: ${id}`;
+  DOM.resultId.innerText = id;
+  DOM.resultDate.innerText = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : '';
+  DOM.resultTime.innerText = formatTime(now);
+  DOM.resultHint.innerHTML = '';
 
-  addHistoryItem(id, fullName, true, "Thành công");
+  addHistoryItem(id, fullName, true, "Có mặt");
 
-  DOM.btnConfirmResult.style.display = 'block';
-  DOM.btnConfirmResult.innerText = "Xác nhận & Quét tiếp";
+  DOM.btnConfirmResult.innerText = "Xác nhận & quét tiếp";
 }
 
 // Xử lý khi Quét THẤT BẠI (Lỗi hệ thống hoặc ID không khớp)
 function handleScanError(id, errorMessage) {
   // Phát âm trầm báo lỗi
   playAudioAlert(false);
-  
+
   // Đọc âm lỗi
   speakVietnamese("Lỗi điểm danh");
-  
+
+  const err = describeError(errorMessage);
+
   // Cập nhật giao diện thông báo lỗi
   DOM.resultPopup.className = "result-popup active error";
-  DOM.resultIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
-  DOM.resultTitle.innerText = "ĐIỂM DANH THẤT BẠI";
-  DOM.resultName.innerText = errorMessage;
-  DOM.resultId.innerText = `Mã quét: ${id}`;
-  
-  DOM.btnConfirmResult.style.display = 'block';
-  DOM.btnConfirmResult.innerText = "Thử lại";
+  DOM.resultIcon.innerHTML = `<span>${icon('alert')}</span>`;
+  DOM.resultTitle.innerText = "Điểm danh thất bại";
+  DOM.resultName.innerText = err.title;
+  DOM.resultId.innerText = id;
+  DOM.resultHint.innerHTML = err.hint;
 
-  addHistoryItem(id, errorMessage, false, "Thất bại");
+  DOM.btnConfirmResult.innerText = "Quét lại";
+
+  addHistoryItem(id, err.title, false, "Lỗi");
 
   clearTimeout(state.autoCloseTimeout);
 }
 
 // Giao diện trung gian khi chờ phản hồi API
 function showResultLoading(id) {
-  DOM.resultPopup.className = "result-popup active";
-  DOM.resultPopup.style.background = "rgba(18, 22, 38, 0.95)";
-  DOM.resultIcon.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="color: var(--primary)"></i>';
-  DOM.resultTitle.innerText = "ĐANG XÁC THỰC";
-  DOM.resultTitle.style.color = "var(--primary)";
+  DOM.resultPopup.className = "result-popup active loading";
+  DOM.resultIcon.innerHTML = '<span><span class="spinner"></span></span>';
+  DOM.resultTitle.innerText = "Đang xác thực";
   DOM.resultName.innerText = "Đang kiểm tra bảng điểm danh...";
-  DOM.resultId.innerText = `ID: ${id}`;
-  DOM.btnConfirmResult.style.display = 'none';
+  DOM.resultId.innerText = id;
+  DOM.resultHint.innerHTML = '';
 }
 
 // Đóng popup kết quả và khôi phục quét camera
 function closeResultPopup() {
   clearTimeout(state.autoCloseTimeout);
   DOM.resultPopup.classList.remove('active');
-  
+
   // Bật lại hiệu ứng quét laser
   if (state.isCameraActive) {
     DOM.laserLine.style.display = 'block';
   }
-  
+
   // Chờ 500ms (sau khi đóng xong hiệu ứng) để tránh quét lại lập tức mã cũ
   setTimeout(() => {
     state.isProcessing = false;
@@ -743,13 +895,11 @@ function closeResultPopup() {
 }
 
 // Toast nhanh trong vùng camera (chế độ liên tục)
-function showScanToast(text, id, isSuccess) {
+function showScanToast(text, subText, isSuccess) {
   DOM.scanToast.className = 'scan-toast ' + (isSuccess ? 'success-toast' : 'error-toast');
-  DOM.scanToastIcon.innerHTML = isSuccess
-    ? '<i class="fa-solid fa-circle-check"></i>'
-    : '<i class="fa-solid fa-triangle-exclamation"></i>';
+  DOM.scanToastIcon.innerHTML = icon(isSuccess ? 'check' : 'alert');
   DOM.scanToastName.textContent = text;
-  DOM.scanToastId.textContent = `Mã: ${id}`;
+  DOM.scanToastId.textContent = subText;
 
   DOM.scanToast.classList.add('show');
 
@@ -765,7 +915,7 @@ function showScanToast(text, id, isSuccess) {
 // Cập nhật badge số request đang pending
 function updatePendingBadge() {
   if (state.pendingCount > 0) {
-    DOM.pendingIndicator.style.display = 'flex';
+    DOM.pendingIndicator.style.display = 'inline-flex';
     DOM.pendingText.textContent = state.pendingCount;
   } else {
     DOM.pendingIndicator.style.display = 'none';
@@ -773,63 +923,76 @@ function updatePendingBadge() {
 }
 
 // 10. Quản lý Lịch sử Quét (Local Session Logs)
+function formatTime(date) {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+}
+
+function formatShortDate(date) {
+  return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Lấy chữ cái đầu của 2 từ cuối trong tên (VD: "Maria Nguyễn Thị Lan" → "TL")
+function getInitials(name) {
+  const words = String(name).trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return words.slice(-2).map(w => w[0]).join('').toUpperCase();
+}
+
 function addHistoryItem(id, name, success, note) {
   const now = new Date();
-  const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-  const dateStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}`;
 
   const newItem = {
     id: id,
     name: name,
-    date: dateStr,
-    time: timeStr,
+    date: formatShortDate(now),
+    time: formatTime(now),
     success: success,
     note: note
   };
-  
+
+  if (success) {
+    state.sessionPresent++;
+    updateSessionCount();
+  }
+
   // Thêm vào đầu mảng
   state.scanHistory.unshift(newItem);
-  
+
   // Giới hạn tối đa lưu 30 bản ghi gần nhất
   if (state.scanHistory.length > 30) {
     state.scanHistory.pop();
   }
-  
+
   // Lưu vào localStorage
   localStorage.setItem('qr_attendance_history', JSON.stringify(state.scanHistory));
-  
+
   // Vẽ lại bảng lịch sử
   renderHistory();
 }
 
 function renderHistory() {
+  DOM.logCount.innerText = `${state.scanHistory.length} lượt`;
+
   if (state.scanHistory.length === 0) {
     DOM.logList.innerHTML = '<div class="log-empty">Chưa có ai điểm danh trong phiên này</div>';
-    DOM.logCount.innerText = 'Đã quét: 0';
     return;
   }
-  
-  DOM.logCount.innerText = `Đã quét: ${state.scanHistory.length}`;
-  
-  let html = '';
-  state.scanHistory.forEach(item => {
-    const successIcon = item.success 
-      ? `<i class="fa-solid fa-circle-check" style="color: var(--success); font-size: 16px;"></i>`
-      : `<i class="fa-solid fa-circle-xmark" style="color: var(--error); font-size: 16px;"></i>`;
-      
-    html += `
-      <div class="log-item">
-        <div class="log-info-group">
-          <span class="log-name">${item.name}</span>
-          <span class="log-details">${item.id} • ${item.note}</span>
+
+  const today = formatShortDate(new Date());
+
+  DOM.logList.innerHTML = state.scanHistory.map(item => {
+    const time = (item.time || '').slice(0, 5);
+    const when = item.date && item.date !== today ? `${item.date} ${time}` : time;
+    return `
+      <div class="log-item${item.success ? '' : ' fail'}">
+        <div class="avatar">${item.success ? escapeHtml(getInitials(item.name)) : '!'}</div>
+        <div class="log-info">
+          <div class="log-name">${escapeHtml(item.name)}</div>
+          <div class="log-details">${escapeHtml(item.id)} · ${when}</div>
         </div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <span class="log-time">${item.date ? item.date + ' ' : ''}${item.time}</span>
-          ${successIcon}
-        </div>
+        <span class="badge">${item.success ? 'Có mặt' : 'Lỗi'}</span>
       </div>
     `;
-  });
-  
-  DOM.logList.innerHTML = html;
+  }).join('');
 }

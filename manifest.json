@@ -4,8 +4,8 @@
   "description": "Ứng dụng quét mã QR để điểm danh nhanh chóng và lưu trực tiếp về Google Sheets của bạn mà không cần server trung gian.",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#0b0d19",
-  "theme_color": "#4361ee",
+  "background_color": "#F3F4F1",
+  "theme_color": "#F3F4F1",
   "orientation": "portrait",
   "icons": [
     {
