@@ -28,9 +28,9 @@
 **DiemDanhQR** is a zero-server-cost mobile Progressive Web App (PWA) that scans member QR codes via smartphone camera and logs attendance directly into **Google Sheets** in real time through a **Google Apps Script (`doGet`)** webhook backend.
 
 ### Key Engineering Features
-- **Continuous Queue Scanning Mode (`~25 people/min`):** Keeps the camera stream running continuously without blocking on network latency. Uses a `3,000ms` per-ID debounce map (`recentScans`) so operators can scan a line of attendees rapidly while Google Apps Script requests resolve asynchronously in the background.
-- **Automated Google Sheets Schema Management:** The Apps Script endpoint ([`google-apps-script.js`](google-apps-script.js)) automatically locates or creates the `dd-MM-yyyy` date column on the **`Data`** sheet, marks `"x"` on the matching member row, and returns the member's full name as JSON.
-- **Field-Tested Mobile UX:**
+- **Continuous Queue Scanning Mode:** Keeps the camera stream running continuously without blocking on network latency. Uses a `3,000ms` per-ID debounce map (`recentScans`) so operators can scan a line of attendees rapidly while Google Apps Script requests resolve asynchronously in the background.
+- **Automated Google Sheets Schema Management:** The Apps Script endpoint ([`google-apps-script.js`](google-apps-script.js)) automatically locates or creates the `dd-MM-yyyy` date column on the **`Data`** sheet, marks `"x"` on the matching member row, and returns JSON `{ "result": "SUCCESS: <full name>" }` (or `"ERROR: ..."`).
+- **Mobile UX:**
   - **Multi-Lens Camera Selector:** Enumerates physical camera lenses (including `0.6x` ultra-wide lenses on modern phones for close-range focus).
   - **Synthesized Web Audio & Voice Greeting:** Generates crisp success/error tones via **Web Audio API** (zero external MP3 assets) and reads the attendee's name aloud via **Web Speech API (`speechSynthesis`)**.
   - **Installable PWA:** Includes `manifest.json` and `sw.js` Service Worker for home-screen installation on Android & iOS.
@@ -38,9 +38,9 @@
 ```mermaid
 flowchart LR
     QR["Smartphone Camera\n(html5-qrcode)"] --> PWA["DiemDanhQR PWA\n(3s Debounce Queue)"]
-    PWA -->|"GET ?id=GT01&date=dd-MM-yyyy"| GAS["Google Apps Script\n(doGet Webhook)"]
+    PWA -->|"GET ?scannedId=GT01&selectedDate=YYYY-MM-DD"| GAS["Google Apps Script\n(doGet Webhook)"]
     GAS -->|"Find/Create Date Column\n& Mark 'x'"| Sheet[("Google Sheets\n('Data' Tab)")]
-    GAS -->|"JSON { status, name }"| PWA
+    GAS -->|"JSON { result }"| PWA
 ```
 
 ---
