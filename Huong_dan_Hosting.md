@@ -10,7 +10,7 @@ Dưới đây là 2 cách đưa ứng dụng của bạn lên hosting miễn ph�
 *Đây là cách nhanh nhất, chỉ mất đúng **10 giây**, không cần tạo tài khoản phức tạp, không cần gõ dòng lệnh.*
 
 1. Mở trình duyệt trên máy tính và truy cập vào trang web: [**https://app.netlify.com/drop**](https://app.netlify.com/drop)
-2. Mở thư mục chứa ứng dụng của bạn trên máy tính (`d:\CodeLearn\App điểm danh\`).
+2. Mở thư mục chứa ứng dụng của bạn trên máy tính (thư mục `DiemDanhQR` vừa clone về).
 3. Chọn các tệp tin sau và nén lại thành 1 file ZIP (hoặc kéo cả thư mục **`App điểm danh`**):
    - `index.html`
    - `style.css`
@@ -38,7 +38,7 @@ Dưới đây là 2 cách đưa ứng dụng của bạn lên hosting miễn ph�
 
 ### Bước 2.2: Tải code lên trực tiếp bằng Trình duyệt (Không cần cài Git)
 1. Tại trang kho chứa vừa tạo, hãy nhấn vào dòng chữ **"uploading an existing file"** (tải lên tệp có sẵn).
-2. Mở thư mục `d:\CodeLearn\App điểm danh\` trên máy tính.
+2. Mở thư mục `DiemDanhQR` trên máy tính.
 3. Kéo và thả toàn bộ các file sau vào vùng tải lên của GitHub:
    - `index.html`
    - `style.css`
